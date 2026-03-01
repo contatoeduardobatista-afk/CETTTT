@@ -127,7 +127,7 @@ app.post('/sign-pdf', upload.fields([
       color: rgb(0.95, 0.97, 1),
     });
 
-    lastPage.drawText(`✓ ASSINADO DIGITALMENTE - ICP-Brasil`, {
+    lastPage.drawText(`ASSINADO DIGITALMENTE - ICP-Brasil`, {
       x: 40,
       y: 60,
       size: 8,
