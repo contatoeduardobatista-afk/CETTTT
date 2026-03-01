@@ -1,240 +1,116 @@
 const express = require('express');
 const forge = require('node-forge');
-const { PDFDocument, rgb } = require('pdf-lib');
 const cors = require('cors');
 const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
+const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+const { signpdf } = require('@signpdf/signpdf');
+const { P12Signer } = require('@signpdf/signer-p12');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// =============================================
-// ROTA: Assinar PDF com certificado .pfx
-// =============================================
+async function preparePdfForSigning(pdfBuffer, signerName, validTo) {
+  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const pages = pdfDoc.getPages();
+  const lastPage = pages[pages.length - 1];
+  const { width } = lastPage.getSize();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const now = new Date();
+  const dateStr = now.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+  lastPage.drawRectangle({
+    x: 30, y: 15, width: width - 60, height: 65,
+    borderColor: rgb(0, 0.27, 0.55), borderWidth: 1.5,
+    color: rgb(0.94, 0.97, 1),
+  });
+  lastPage.drawText('ASSINADO DIGITALMENTE - ICP-Brasil', {
+    x: 40, y: 63, size: 8, font: fontBold, color: rgb(0, 0.27, 0.55),
+  });
+  lastPage.drawText(`Titular: ${signerName}`, {
+    x: 40, y: 50, size: 7, font, color: rgb(0.15, 0.15, 0.15),
+  });
+  lastPage.drawText(`Data/Hora: ${dateStr}`, {
+    x: 40, y: 39, size: 7, font, color: rgb(0.15, 0.15, 0.15),
+  });
+  lastPage.drawText(`Certificado valido ate: ${validTo}`, {
+    x: 40, y: 28, size: 7, font, color: rgb(0.15, 0.15, 0.15),
+  });
+  lastPage.drawText('Verifique em: validar.iti.gov.br', {
+    x: 40, y: 18, size: 7, font, color: rgb(0.4, 0.4, 0.4),
+  });
+
+  pdfDoc.getForm();
+  const pdfBytes = await pdfDoc.save({ addDefaultPage: false, useObjectStreams: false });
+  return Buffer.from(pdfBytes);
+}
+
 app.post('/sign-pdf', upload.fields([
   { name: 'pdf', maxCount: 1 },
   { name: 'pfx', maxCount: 1 }
 ]), async (req, res) => {
   try {
+    if (!req.files || !req.files['pdf']) {
+      return res.status(400).json({ error: 'Arquivo PDF nao fornecido' });
+    }
     const pdfBuffer = req.files['pdf'][0].buffer;
-    const pfxBuffer = req.files['pfx'] ? req.files['pfx'][0].buffer : null;
-    const pfxBase64 = req.body.pfxBase64 || null;
-    const pfxPassword = req.body.pfxPassword || '';
 
-    // Carregar o .pfx
-    let pfxBytes;
-    if (pfxBuffer) {
-      pfxBytes = pfxBuffer;
-    } else if (pfxBase64) {
-      pfxBytes = Buffer.from(pfxBase64, 'base64');
+    let pfxBuffer;
+    if (req.files['pfx']) {
+      pfxBuffer = req.files['pfx'][0].buffer;
+    } else if (req.body.pfxBase64) {
+      pfxBuffer = Buffer.from(req.body.pfxBase64, 'base64');
     } else {
-      return res.status(400).json({ error: 'Certificado .pfx não fornecido' });
+      return res.status(400).json({ error: 'Certificado .pfx nao fornecido' });
     }
 
-    // Parsear o .pfx com node-forge
-    const pfxDer = forge.util.createBuffer(pfxBytes.toString('binary'));
-    const pfxAsn1 = forge.asn1.fromDer(pfxDer);
-    
-    let pfxObj;
+    const password = req.body.pfxPassword || '';
+    let signerName = 'Assinante';
+    let validTo = '';
+
     try {
-      pfxObj = forge.pkcs12.pkcs12FromAsn1(pfxAsn1, pfxPassword);
-    } catch (e) {
-      return res.status(400).json({ error: 'Senha do certificado incorreta ou arquivo .pfx inválido' });
-    }
-
-    // Extrair chave privada
-    const keyBags = pfxObj.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
-    const keyBag = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag][0];
-    if (!keyBag) {
-      return res.status(400).json({ error: 'Chave privada não encontrada no certificado' });
-    }
-    const privateKey = keyBag.key;
-
-    // Extrair todos os certificados da cadeia
-    const certBags = pfxObj.getBags({ bagType: forge.pki.oids.certBag });
-    const certBagList = certBags[forge.pki.oids.certBag];
-    if (!certBagList || certBagList.length === 0) {
-      return res.status(400).json({ error: 'Certificado não encontrado no arquivo .pfx' });
-    }
-
-    // Encontrar o certificado do assinante (que corresponde à chave privada)
-    let signerCert = null;
-    let chainCerts = [];
-    
-    for (const bag of certBagList) {
-      const cert = bag.cert;
-      try {
-        const publicKey = cert.publicKey;
-        // Comparar chave pública do cert com a chave privada
-        const pubKeyPem = forge.pki.publicKeyToPem(publicKey);
-        const privKeyPem = forge.pki.privateKeyToPem(privateKey);
-        // Verifica se o par de chaves é compatível
-        const testMsg = 'test';
-        const md = forge.md.sha256.create();
-        md.update(testMsg);
-        const sig = privateKey.sign(md);
-        const md2 = forge.md.sha256.create();
-        md2.update(testMsg);
-        if (publicKey.verify(md2.digest().bytes(), sig)) {
-          signerCert = cert;
-        } else {
-          chainCerts.push(cert);
+      const pfxDer = forge.util.createBuffer(pfxBuffer.toString('binary'));
+      const pfxAsn1 = forge.asn1.fromDer(pfxDer);
+      const pfxObj = forge.pkcs12.pkcs12FromAsn1(pfxAsn1, password);
+      const certBags = pfxObj.getBags({ bagType: forge.pki.oids.certBag });
+      const certBagList = certBags[forge.pki.oids.certBag];
+      if (certBagList && certBagList.length > 0) {
+        const cert = certBagList[0].cert;
+        signerName = cert.subject.getField('CN')?.value || 'Assinante';
+        validTo = cert.validity.notAfter.toLocaleDateString('pt-BR');
+        if (new Date() > cert.validity.notAfter) {
+          return res.status(400).json({ error: `Certificado expirado em ${validTo}` });
         }
-      } catch (e) {
-        chainCerts.push(cert);
       }
+    } catch (e) {
+      return res.status(400).json({ error: 'Senha incorreta ou .pfx invalido' });
     }
 
-    if (!signerCert) {
-      signerCert = certBagList[0].cert;
-      chainCerts = certBagList.slice(1).map(b => b.cert);
-    }
+    const preparedPdf = await preparePdfForSigning(pdfBuffer, signerName, validTo);
+    const signer = new P12Signer(pfxBuffer, { passphrase: password });
+    const signedPdfBuffer = await signpdf(preparedPdf, signer);
 
-    // Informações do titular
-    const subject = signerCert.subject;
-    const cn = subject.getField('CN')?.value || 'Assinante';
-    const validTo = signerCert.validity.notAfter;
-
-    // Verificar validade do certificado
-    const now = new Date();
-    if (now > validTo) {
-      return res.status(400).json({ error: `Certificado expirado em ${validTo.toLocaleDateString('pt-BR')}` });
-    }
-
-    // =============================================
-    // Preparar o PDF para assinatura PAdES
-    // =============================================
-    const pdfDoc = await PDFDocument.load(pdfBuffer);
-    const pages = pdfDoc.getPages();
-    const lastPage = pages[pages.length - 1];
-    const { width, height } = lastPage.getSize();
-
-    // Adicionar campo de assinatura visual na última página
-    const signatureText = `Assinado digitalmente por: ${cn}\nData: ${now.toLocaleString('pt-BR')}\nCertificado ICP-Brasil válido até: ${validTo.toLocaleDateString('pt-BR')}`;
-    
-    lastPage.drawRectangle({
-      x: 30,
-      y: 20,
-      width: width - 60,
-      height: 60,
-      borderColor: rgb(0, 0.3, 0.6),
-      borderWidth: 1,
-      color: rgb(0.95, 0.97, 1),
-    });
-
-    lastPage.drawText(`ASSINADO DIGITALMENTE - ICP-Brasil`, {
-      x: 40,
-      y: 60,
-      size: 8,
-      color: rgb(0, 0.3, 0.6),
-    });
-
-    lastPage.drawText(`Titular: ${cn}`, {
-      x: 40,
-      y: 48,
-      size: 7,
-      color: rgb(0.2, 0.2, 0.2),
-    });
-
-    lastPage.drawText(`Data/Hora: ${now.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`, {
-      x: 40,
-      y: 37,
-      size: 7,
-      color: rgb(0.2, 0.2, 0.2),
-    });
-
-    lastPage.drawText(`Certificado válido até: ${validTo.toLocaleDateString('pt-BR')}`, {
-      x: 40,
-      y: 26,
-      size: 7,
-      color: rgb(0.2, 0.2, 0.2),
-    });
-
-    // Serializar o PDF modificado
-    const modifiedPdfBytes = await pdfDoc.save();
-
-    // =============================================
-    // Criar assinatura PKCS#7 / PAdES
-    // =============================================
-    const pdfToSign = Buffer.from(modifiedPdfBytes);
-    
-    // Calcular hash SHA-256 do PDF
-    const md = forge.md.sha256.create();
-    md.update(forge.util.createBuffer(pdfToSign.toString('binary')).bytes());
-    
-    // Criar estrutura PKCS#7 SignedData
-    const p7 = forge.pkcs7.createSignedData();
-    p7.content = forge.util.createBuffer(pdfToSign.toString('binary'));
-    
-    // Adicionar todos os certificados da cadeia
-    p7.addCertificate(signerCert);
-    for (const cert of chainCerts) {
-      p7.addCertificate(cert);
-    }
-
-    // Adicionar assinante
-    p7.addSigner({
-      key: privateKey,
-      certificate: signerCert,
-      digestAlgorithm: forge.pki.oids.sha256,
-      authenticatedAttributes: [
-        {
-          type: forge.pki.oids.contentType,
-          value: forge.pki.oids.data,
-        },
-        {
-          type: forge.pki.oids.messageDigest,
-        },
-        {
-          type: forge.pki.oids.signingTime,
-          value: now,
-        },
-      ],
-    });
-
-    // Assinar
-    p7.sign({ detached: true });
-
-    // Converter assinatura para DER
-    const p7Asn1 = p7.toAsn1();
-    const p7Der = forge.asn1.toDer(p7Asn1).getBytes();
-    const p7Buffer = Buffer.from(p7Der, 'binary');
-
-    // Retornar o PDF com a assinatura embutida
-    // Como o PAdES completo requer manipulação binária complexa do PDF,
-    // retornamos o PDF modificado + a assinatura PKCS#7 separada
-    // e incluímos as informações do certificado
-    
     res.json({
       success: true,
-      signedPdfBase64: Buffer.from(modifiedPdfBytes).toString('base64'),
-      signatureBase64: p7Buffer.toString('base64'),
+      signedPdfBase64: Buffer.from(signedPdfBuffer).toString('base64'),
       signerInfo: {
-        name: cn,
-        validTo: validTo.toLocaleDateString('pt-BR'),
-        signedAt: now.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-      }
+        name: signerName,
+        validTo,
+        signedAt: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+      },
     });
-
   } catch (error) {
-    console.error('Erro ao assinar PDF:', error);
-    res.status(500).json({ error: 'Erro interno ao assinar PDF: ' + error.message });
+    console.error('Erro:', error);
+    res.status(500).json({ error: 'Erro ao assinar: ' + error.message });
   }
 });
 
-// =============================================
-// ROTA: Verificar saúde do servidor
-// =============================================
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Servidor de assinatura digital funcionando' });
+  res.json({ status: 'ok' });
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Servidor de assinatura digital rodando na porta ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
