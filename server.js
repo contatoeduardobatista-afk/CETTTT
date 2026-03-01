@@ -3,51 +3,14 @@ const forge = require('node-forge');
 const cors = require('cors');
 const multer = require('multer');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
-const { SignPdf, Signer } = require('@signpdf/signpdf');
+const { SignPdf } = require('@signpdf/signpdf');
 const { pdflibAddPlaceholder } = require('@signpdf/placeholder-pdf-lib');
+const { P12Signer } = require('@signpdf/signer-p12');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
-class P12ForgeSigner extends Signer {
-  constructor(pfxBuffer, password) {
-    super();
-    this.pfxBuffer = pfxBuffer;
-    this.password = password;
-  }
-
-  async sign(pdfBuffer, placeholderLength) {
-    const pfxDer = forge.util.createBuffer(this.pfxBuffer.toString('binary'));
-    const pfxAsn1 = forge.asn1.fromDer(pfxDer);
-    const pfxObj = forge.pkcs12.pkcs12FromAsn1(pfxAsn1, this.password);
-
-    const keyBags = pfxObj.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
-    const privateKey = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag][0].key;
-    const certBags = pfxObj.getBags({ bagType: forge.pki.oids.certBag });
-    const certs = certBags[forge.pki.oids.certBag].map(b => b.cert);
-
-    const p7 = forge.pkcs7.createSignedData();
-    p7.content = forge.util.createBuffer(pdfBuffer.toString('binary'));
-    certs.forEach(cert => p7.addCertificate(cert));
-
-    p7.addSigner({
-      key: privateKey,
-      certificate: certs[0],
-      digestAlgorithm: forge.pki.oids.sha256,
-      authenticatedAttributes: [
-        { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
-        { type: forge.pki.oids.messageDigest },
-        { type: forge.pki.oids.signingTime, value: new Date() },
-      ],
-    });
-
-    p7.sign({ detached: true });
-    const p7Der = forge.asn1.toDer(p7.toAsn1()).getBytes();
-    return Buffer.from(p7Der, 'binary');
-  }
-}
 
 app.post('/sign-pdf', upload.fields([
   { name: 'pdf', maxCount: 1 },
@@ -90,7 +53,6 @@ app.post('/sign-pdf', upload.fields([
       return res.status(400).json({ error: 'Senha incorreta ou .pfx invalido: ' + e.message });
     }
 
-    // PASSO 1: Carregar PDF e adicionar visual
     const pdfDoc = await PDFDocument.load(pdfBuffer);
     const pages = pdfDoc.getPages();
     const lastPage = pages[pages.length - 1];
@@ -120,7 +82,6 @@ app.post('/sign-pdf', upload.fields([
       x: 40, y: 18, size: 7, font, color: rgb(0.4, 0.4, 0.4),
     });
 
-    // PASSO 2: Adicionar placeholder de assinatura
     await pdflibAddPlaceholder({
       pdfDoc,
       reason: 'Assinado digitalmente com certificado ICP-Brasil',
@@ -130,12 +91,9 @@ app.post('/sign-pdf', upload.fields([
       signatureLength: 32768,
     });
 
-    // PASSO 3: Salvar PDF com placeholder (sem mais modificacoes apos isso)
     const pdfWithPlaceholder = Buffer.from(await pdfDoc.save({ useObjectStreams: false }));
-
-    // PASSO 4: Assinar o PDF salvo
     const signPdf = new SignPdf();
-    const signer = new P12ForgeSigner(pfxBuffer, password);
+    const signer = new P12Signer(pfxBuffer, { passphrase: password });
     const signedPdf = await signPdf.sign(pdfWithPlaceholder, signer);
 
     res.json({
