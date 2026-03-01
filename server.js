@@ -11,37 +11,6 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-async function preparePdfForSigning(pdfDoc, signerName, validTo) {
-  const pages = pdfDoc.getPages();
-  const lastPage = pages[pages.length - 1];
-  const { width } = lastPage.getSize();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const dateStr = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-  lastPage.drawRectangle({
-    x: 30, y: 15, width: width - 60, height: 65,
-    borderColor: rgb(0, 0.27, 0.55), borderWidth: 1.5,
-    color: rgb(0.94, 0.97, 1),
-  });
-  lastPage.drawText('ASSINADO DIGITALMENTE - ICP-Brasil', {
-    x: 40, y: 63, size: 8, font: fontBold, color: rgb(0, 0.27, 0.55),
-  });
-  lastPage.drawText('Titular: ' + signerName, {
-    x: 40, y: 50, size: 7, font, color: rgb(0.15, 0.15, 0.15),
-  });
-  lastPage.drawText('Data/Hora: ' + dateStr, {
-    x: 40, y: 39, size: 7, font, color: rgb(0.15, 0.15, 0.15),
-  });
-  lastPage.drawText('Certificado valido ate: ' + validTo, {
-    x: 40, y: 28, size: 7, font, color: rgb(0.15, 0.15, 0.15),
-  });
-  lastPage.drawText('Verifique em: validar.iti.gov.br', {
-    x: 40, y: 18, size: 7, font, color: rgb(0.4, 0.4, 0.4),
-  });
-}
-
-// Signer que herda da classe base do @signpdf/signpdf
 class P12ForgeSigner extends Signer {
   constructor(pfxBuffer, password) {
     super();
@@ -61,7 +30,6 @@ class P12ForgeSigner extends Signer {
 
     const p7 = forge.pkcs7.createSignedData();
     p7.content = forge.util.createBuffer(pdfBuffer.toString('binary'));
-
     certs.forEach(cert => p7.addCertificate(cert));
 
     p7.addSigner({
@@ -122,10 +90,37 @@ app.post('/sign-pdf', upload.fields([
       return res.status(400).json({ error: 'Senha incorreta ou .pfx invalido: ' + e.message });
     }
 
-    // Preparar PDF com visual + placeholder
+    // PASSO 1: Carregar PDF e adicionar visual
     const pdfDoc = await PDFDocument.load(pdfBuffer);
-    await preparePdfForSigning(pdfDoc, signerName, validTo);
+    const pages = pdfDoc.getPages();
+    const lastPage = pages[pages.length - 1];
+    const { width } = lastPage.getSize();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const dateStr = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
+    lastPage.drawRectangle({
+      x: 30, y: 15, width: width - 60, height: 65,
+      borderColor: rgb(0, 0.27, 0.55), borderWidth: 1.5,
+      color: rgb(0.94, 0.97, 1),
+    });
+    lastPage.drawText('ASSINADO DIGITALMENTE - ICP-Brasil', {
+      x: 40, y: 63, size: 8, font: fontBold, color: rgb(0, 0.27, 0.55),
+    });
+    lastPage.drawText('Titular: ' + signerName, {
+      x: 40, y: 50, size: 7, font, color: rgb(0.15, 0.15, 0.15),
+    });
+    lastPage.drawText('Data/Hora: ' + dateStr, {
+      x: 40, y: 39, size: 7, font, color: rgb(0.15, 0.15, 0.15),
+    });
+    lastPage.drawText('Certificado valido ate: ' + validTo, {
+      x: 40, y: 28, size: 7, font, color: rgb(0.15, 0.15, 0.15),
+    });
+    lastPage.drawText('Verifique em: validar.iti.gov.br', {
+      x: 40, y: 18, size: 7, font, color: rgb(0.4, 0.4, 0.4),
+    });
+
+    // PASSO 2: Adicionar placeholder de assinatura
     await pdflibAddPlaceholder({
       pdfDoc,
       reason: 'Assinado digitalmente com certificado ICP-Brasil',
@@ -135,13 +130,13 @@ app.post('/sign-pdf', upload.fields([
       signatureLength: 32768,
     });
 
-    const preparedPdfBytes = await pdfDoc.save({ useObjectStreams: false });
-    const preparedPdf = Buffer.from(preparedPdfBytes);
+    // PASSO 3: Salvar PDF com placeholder (sem mais modificacoes apos isso)
+    const pdfWithPlaceholder = Buffer.from(await pdfDoc.save({ useObjectStreams: false }));
 
-    // Assinar
+    // PASSO 4: Assinar o PDF salvo
     const signPdf = new SignPdf();
     const signer = new P12ForgeSigner(pfxBuffer, password);
-    const signedPdf = await signPdf.sign(preparedPdf, signer);
+    const signedPdf = await signPdf.sign(pdfWithPlaceholder, signer);
 
     res.json({
       success: true,
