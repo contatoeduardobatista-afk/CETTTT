@@ -3,8 +3,9 @@ const forge = require('node-forge');
 const cors = require('cors');
 const multer = require('multer');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
-const { signpdf } = require('@signpdf/signpdf');
-const { P12Signer } = require('@signpdf/signer-p12');
+const { plainAddPlaceholder } = require('@signpdf/placeholder-pdf-lib');
+const signpdf = require('@signpdf/signpdf').default;
+const { P12Signer } = require('@signpdf/signpdf');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -19,8 +20,7 @@ async function preparePdfForSigning(pdfBuffer, signerName, validTo) {
   const { width } = lastPage.getSize();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const now = new Date();
-  const dateStr = now.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  const dateStr = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
   lastPage.drawRectangle({
     x: 30, y: 15, width: width - 60, height: 65,
@@ -30,21 +30,20 @@ async function preparePdfForSigning(pdfBuffer, signerName, validTo) {
   lastPage.drawText('ASSINADO DIGITALMENTE - ICP-Brasil', {
     x: 40, y: 63, size: 8, font: fontBold, color: rgb(0, 0.27, 0.55),
   });
-  lastPage.drawText(`Titular: ${signerName}`, {
+  lastPage.drawText('Titular: ' + signerName, {
     x: 40, y: 50, size: 7, font, color: rgb(0.15, 0.15, 0.15),
   });
-  lastPage.drawText(`Data/Hora: ${dateStr}`, {
+  lastPage.drawText('Data/Hora: ' + dateStr, {
     x: 40, y: 39, size: 7, font, color: rgb(0.15, 0.15, 0.15),
   });
-  lastPage.drawText(`Certificado valido ate: ${validTo}`, {
+  lastPage.drawText('Certificado valido ate: ' + validTo, {
     x: 40, y: 28, size: 7, font, color: rgb(0.15, 0.15, 0.15),
   });
   lastPage.drawText('Verifique em: validar.iti.gov.br', {
     x: 40, y: 18, size: 7, font, color: rgb(0.4, 0.4, 0.4),
   });
 
-  pdfDoc.getForm();
-  const pdfBytes = await pdfDoc.save({ addDefaultPage: false, useObjectStreams: false });
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: false });
   return Buffer.from(pdfBytes);
 }
 
@@ -82,7 +81,7 @@ app.post('/sign-pdf', upload.fields([
         signerName = cert.subject.getField('CN')?.value || 'Assinante';
         validTo = cert.validity.notAfter.toLocaleDateString('pt-BR');
         if (new Date() > cert.validity.notAfter) {
-          return res.status(400).json({ error: `Certificado expirado em ${validTo}` });
+          return res.status(400).json({ error: 'Certificado expirado em ' + validTo });
         }
       }
     } catch (e) {
@@ -90,12 +89,21 @@ app.post('/sign-pdf', upload.fields([
     }
 
     const preparedPdf = await preparePdfForSigning(pdfBuffer, signerName, validTo);
+
+    const pdfWithPlaceholder = plainAddPlaceholder({
+      pdfBuffer: preparedPdf,
+      reason: 'Assinado digitalmente com certificado ICP-Brasil',
+      contactInfo: '',
+      name: signerName,
+      location: 'Brasil',
+    });
+
     const signer = new P12Signer(pfxBuffer, { passphrase: password });
-    const signedPdfBuffer = await signpdf(preparedPdf, signer);
+    const signedPdf = await signpdf.sign(pdfWithPlaceholder, signer);
 
     res.json({
       success: true,
-      signedPdfBase64: Buffer.from(signedPdfBuffer).toString('base64'),
+      signedPdfBase64: Buffer.from(signedPdf).toString('base64'),
       signerInfo: {
         name: signerName,
         validTo,
@@ -113,4 +121,4 @@ app.get('/health', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log('Servidor rodando na porta ' + PORT));
