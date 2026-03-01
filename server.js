@@ -3,26 +3,13 @@ const forge = require('node-forge');
 const cors = require('cors');
 const multer = require('multer');
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
+const { SignPdf } = require('@signpdf/signpdf');
+const { pdflibAddPlaceholder } = require('@signpdf/placeholder-pdf-lib');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
-
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
-// Carrega os modulos signpdf de forma segura
-let signpdfLib, placeholderLib, P12SignerLib;
-try {
-  signpdfLib = require('@signpdf/signpdf');
-  placeholderLib = require('@signpdf/placeholder-pdf-lib');
-  P12SignerLib = require('@signpdf/signer-p12');
-  console.log('Modulos signpdf carregados com sucesso');
-  console.log('signpdf keys:', Object.keys(signpdfLib));
-  console.log('placeholder keys:', Object.keys(placeholderLib));
-  console.log('P12Signer keys:', Object.keys(P12SignerLib));
-} catch(e) {
-  console.error('Erro ao carregar modulos signpdf:', e.message);
-}
 
 async function preparePdfForSigning(pdfBuffer, signerName, validTo) {
   const pdfDoc = await PDFDocument.load(pdfBuffer);
@@ -52,6 +39,15 @@ async function preparePdfForSigning(pdfBuffer, signerName, validTo) {
   });
   lastPage.drawText('Verifique em: validar.iti.gov.br', {
     x: 40, y: 18, size: 7, font, color: rgb(0.4, 0.4, 0.4),
+  });
+
+  // Adicionar placeholder de assinatura no PDF
+  await pdflibAddPlaceholder({
+    pdfDoc,
+    reason: 'Assinado digitalmente com certificado ICP-Brasil',
+    contactInfo: '',
+    name: signerName,
+    location: 'Brasil',
   });
 
   const pdfBytes = await pdfDoc.save({ useObjectStreams: false });
@@ -101,39 +97,49 @@ app.post('/sign-pdf', upload.fields([
 
     const preparedPdf = await preparePdfForSigning(pdfBuffer, signerName, validTo);
 
-    // Detectar funcoes disponiveis nos modulos
-    const addPlaceholder = placeholderLib.plainAddPlaceholder 
-      || placeholderLib.default?.plainAddPlaceholder
-      || placeholderLib.addPlaceholder
-      || placeholderLib.default?.addPlaceholder;
+    // Criar signer com P12 usando node-forge diretamente
+    const signPdf = new SignPdf();
 
-    if (!addPlaceholder) {
-      console.error('Funcoes disponiveis em placeholder:', Object.keys(placeholderLib));
-      return res.status(500).json({ error: 'Funcao addPlaceholder nao encontrada. Keys: ' + Object.keys(placeholderLib).join(', ') });
+    // Signer customizado usando node-forge
+    const pfxDer = forge.util.createBuffer(pfxBuffer.toString('binary'));
+    const pfxAsn1 = forge.asn1.fromDer(pfxDer);
+    const pfxObj = forge.pkcs12.pkcs12FromAsn1(pfxAsn1, password);
+
+    const keyBags = pfxObj.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+    const privateKey = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag][0].key;
+    const certBags = pfxObj.getBags({ bagType: forge.pki.oids.certBag });
+    const certs = certBags[forge.pki.oids.certBag].map(b => b.cert);
+
+    // Classe signer compativel com @signpdf/signpdf
+    class ForgeSigner {
+      async sign(pdfBuffer, placeholderLength) {
+        const md = forge.md.sha256.create();
+        md.update(pdfBuffer.toString('binary'));
+
+        const p7 = forge.pkcs7.createSignedData();
+        p7.content = forge.util.createBuffer(pdfBuffer.toString('binary'));
+
+        certs.forEach(cert => p7.addCertificate(cert));
+
+        p7.addSigner({
+          key: privateKey,
+          certificate: certs[0],
+          digestAlgorithm: forge.pki.oids.sha256,
+          authenticatedAttributes: [
+            { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
+            { type: forge.pki.oids.messageDigest },
+            { type: forge.pki.oids.signingTime, value: new Date() },
+          ],
+        });
+
+        p7.sign({ detached: true });
+        const p7Der = forge.asn1.toDer(p7.toAsn1()).getBytes();
+        return Buffer.from(p7Der, 'binary');
+      }
     }
 
-    const P12Signer = P12SignerLib.P12Signer || P12SignerLib.default?.P12Signer || P12SignerLib.default;
-    if (!P12Signer) {
-      return res.status(500).json({ error: 'P12Signer nao encontrado. Keys: ' + Object.keys(P12SignerLib).join(', ') });
-    }
-
-    const signFn = signpdfLib.signpdf || signpdfLib.default?.signpdf || signpdfLib.sign || signpdfLib.default?.sign || signpdfLib.default;
-    if (!signFn) {
-      return res.status(500).json({ error: 'Funcao sign nao encontrada. Keys: ' + Object.keys(signpdfLib).join(', ') });
-    }
-
-    const pdfWithPlaceholder = addPlaceholder({
-      pdfBuffer: preparedPdf,
-      reason: 'Assinado digitalmente com certificado ICP-Brasil',
-      contactInfo: '',
-      name: signerName,
-      location: 'Brasil',
-    });
-
-    const signer = new P12Signer(pfxBuffer, { passphrase: password });
-    const signedPdf = typeof signFn === 'function' 
-      ? await signFn(pdfWithPlaceholder, signer)
-      : await signFn.sign(pdfWithPlaceholder, signer);
+    const signer = new ForgeSigner();
+    const signedPdf = await signPdf.sign(preparedPdf, signer);
 
     res.json({
       success: true,
@@ -151,11 +157,7 @@ app.post('/sign-pdf', upload.fields([
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', modules: {
-    signpdf: Object.keys(signpdfLib || {}),
-    placeholder: Object.keys(placeholderLib || {}),
-    p12signer: Object.keys(P12SignerLib || {})
-  }});
+  res.json({ status: 'ok' });
 });
 
 const PORT = process.env.PORT || 3001;
