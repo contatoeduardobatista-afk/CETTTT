@@ -132,6 +132,7 @@ app.post('/sign-pdf', upload.fields([
       contactInfo: '',
       name: signerName,
       location: 'Brasil',
+      signatureLength: 32768,
     });
 
     const preparedPdfBytes = await pdfDoc.save({ useObjectStreams: false });
