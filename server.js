@@ -34,135 +34,79 @@ async function drawSignatureSeal(pdfDoc, signerName, validTo, dateStr) {
     }
   }
 
-  const sealX = 20;
-  const sealY = 10;
-  const sealW = width - 40;
-  const sealH = 110;
+  const sealX = 30;
+  const sealY = 15;
+  const sealW = width - 60;
+  const sealH = 65;
 
-  // === FUNDO BRANCO ===
+  // Fundo azul claro
   lastPage.drawRectangle({
     x: sealX, y: sealY,
     width: sealW, height: sealH,
-    color: rgb(1, 1, 1),
+    color: rgb(0.94, 0.97, 1),
+    borderColor: rgb(0, 0.27, 0.55),
+    borderWidth: 1.5,
   });
 
-  // === BORDA AZUL ESCURA ===
+  // Faixa azul no topo
   lastPage.drawRectangle({
-    x: sealX, y: sealY,
-    width: sealW, height: sealH,
-    borderColor: rgb(0.0, 0.20, 0.45),
-    borderWidth: 2,
-    color: rgb(1, 1, 1),
+    x: sealX, y: sealY + sealH - 18,
+    width: sealW, height: 18,
+    color: rgb(0, 0.27, 0.55),
   });
 
-  // === FAIXA AZUL ESCURA NO TOPO ===
-  lastPage.drawRectangle({
-    x: sealX, y: sealY + sealH - 24,
-    width: sealW, height: 24,
-    color: rgb(0.0, 0.20, 0.45),
-  });
-
-  // Titulo na faixa
-  lastPage.drawText('DOCUMENTO ASSINADO DIGITALMENTE', {
-    x: sealX + 12, y: sealY + sealH - 16,
-    size: 9, font: fontBold,
-    color: rgb(1, 1, 1),
-  });
-
-  // Badge ICP-Brasil verde
-  lastPage.drawRectangle({
-    x: sealX + sealW - 82, y: sealY + sealH - 22,
-    width: 78, height: 20,
-    color: rgb(0.0, 0.52, 0.24),
-  });
-  lastPage.drawText('ICP-Brasil', {
-    x: sealX + sealW - 67, y: sealY + sealH - 14,
+  lastPage.drawText('ASSINADO DIGITALMENTE - ICP-Brasil', {
+    x: sealX + 10, y: sealY + sealH - 12,
     size: 8, font: fontBold,
     color: rgb(1, 1, 1),
   });
 
-  // === LINHA DOURADA ===
+  // Badge verde ICP-Brasil
   lastPage.drawRectangle({
-    x: sealX, y: sealY + sealH - 26,
-    width: sealW, height: 2,
+    x: sealX + sealW - 78, y: sealY + sealH - 16,
+    width: 74, height: 14,
+    color: rgb(0, 0.50, 0.22),
+  });
+  lastPage.drawText('ICP-Brasil', {
+    x: sealX + sealW - 63, y: sealY + sealH - 10,
+    size: 7, font: fontBold,
+    color: rgb(1, 1, 1),
+  });
+
+  // Linha dourada
+  lastPage.drawRectangle({
+    x: sealX, y: sealY + sealH - 20,
+    width: sealW, height: 1.5,
     color: rgb(0.75, 0.60, 0.10),
   });
 
-  // === COLUNA ESQUERDA - DADOS DO SIGNATARIO ===
-  lastPage.drawText('Assinado por:', {
-    x: sealX + 12, y: sealY + 78,
+  // Dados
+  lastPage.drawText('Titular: ' + displayName, {
+    x: sealX + 10, y: sealY + 50,
     size: 7, font: fontBold,
-    color: rgb(0.25, 0.25, 0.25),
-  });
-  lastPage.drawText(displayName, {
-    x: sealX + 12, y: sealY + 65,
-    size: 8.5, font: fontBold,
-    color: rgb(0.0, 0.20, 0.45),
+    color: rgb(0, 0.27, 0.55),
   });
   if (docNumber) {
     lastPage.drawText(docNumber, {
-      x: sealX + 12, y: sealY + 53,
-      size: 7, font,
+      x: sealX + 10, y: sealY + 40,
+      size: 6.5, font,
       color: rgb(0.15, 0.15, 0.15),
     });
   }
   lastPage.drawText('Data e hora: ' + (dateStr || ''), {
-    x: sealX + 12, y: sealY + 41,
-    size: 7, font,
+    x: sealX + 10, y: sealY + 30,
+    size: 6.5, font,
     color: rgb(0.15, 0.15, 0.15),
   });
   lastPage.drawText('Certificado valido ate: ' + (validTo || ''), {
-    x: sealX + 12, y: sealY + 29,
-    size: 7, font,
+    x: sealX + 10, y: sealY + 20,
+    size: 6.5, font,
     color: rgb(0.15, 0.15, 0.15),
   });
-
-  // === LINHA DIVISORIA VERTICAL ===
-  lastPage.drawRectangle({
-    x: sealX + sealW - 170, y: sealY + 20,
-    width: 1, height: sealH - 46,
-    color: rgb(0.80, 0.80, 0.80),
-  });
-
-  // === COLUNA DIREITA - COMO VERIFICAR ===
-  lastPage.drawText('Como verificar:', {
-    x: sealX + sealW - 162, y: sealY + 78,
-    size: 7, font: fontBold,
-    color: rgb(0.25, 0.25, 0.25),
-  });
-  lastPage.drawText('Acesse o portal oficial do ITI', {
-    x: sealX + sealW - 162, y: sealY + 65,
-    size: 7, font,
-    color: rgb(0.15, 0.15, 0.15),
-  });
-  lastPage.drawText('e valide este documento:', {
-    x: sealX + sealW - 162, y: sealY + 53,
-    size: 7, font,
-    color: rgb(0.15, 0.15, 0.15),
-  });
-  lastPage.drawText('validar.iti.gov.br', {
-    x: sealX + sealW - 162, y: sealY + 38,
-    size: 8.5, font: fontBold,
-    color: rgb(0.0, 0.35, 0.70),
-  });
-
-  // === LINHA DIVISORIA HORIZONTAL ANTES DO RODAPE ===
-  lastPage.drawRectangle({
-    x: sealX, y: sealY + 18,
-    width: sealW, height: 0.8,
-    color: rgb(0.75, 0.75, 0.75),
-  });
-
-  // === RODAPE CINZA CLARO ===
-  lastPage.drawRectangle({
-    x: sealX, y: sealY,
-    width: sealW, height: 18,
-    color: rgb(0.95, 0.95, 0.95),
-  });
-  lastPage.drawText('Conforme MP 2.200-2/2001 e Lei 14.063/2020 - Infraestrutura de Chaves Publicas Brasileira (ICP-Brasil)', {
-    x: sealX + 12, y: sealY + 6,
-    size: 5.5, font,
-    color: rgb(0.40, 0.40, 0.40),
+  lastPage.drawText('Verifique em: validar.iti.gov.br', {
+    x: sealX + 10, y: sealY + 10,
+    size: 6.5, font,
+    color: rgb(0.30, 0.30, 0.30),
   });
 }
 
@@ -210,8 +154,10 @@ app.post('/sign-pdf', upload.fields([
     const dateStr = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const pdfDoc = await PDFDocument.load(pdfBuffer);
 
+    // 1. Desenhar selo visual
     await drawSignatureSeal(pdfDoc, signerName, validTo, dateStr);
 
+    // 2. Adicionar placeholder
     await pdflibAddPlaceholder({
       pdfDoc,
       reason: 'Assinado digitalmente com certificado ICP-Brasil',
@@ -221,6 +167,7 @@ app.post('/sign-pdf', upload.fields([
       signatureLength: 32768,
     });
 
+    // 3. Salvar e assinar - sem mais modificacoes apos isso
     const pdfWithPlaceholder = Buffer.from(await pdfDoc.save({ useObjectStreams: false }));
     const signPdf = new SignPdf();
     const signer = new P12Signer(pfxBuffer, { passphrase: password });
