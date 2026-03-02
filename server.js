@@ -48,7 +48,7 @@ async function drawSignatureSeal(pdfDoc, signerName, validTo, dateStr) {
   while (wx < width + 100) {
     let wy = -20;
     while (wy < height + 20) {
-      const txt = watermarkTexts[Math.floor((wx * wy) % 3)];
+      const idx = Math.abs(Math.floor((wx * wy) % 3)); const txt = watermarkTexts[idx] || 'ICP-BRASIL';
       lastPage.drawText(txt, {
         x: wx, y: wy,
         size: 6, font,
@@ -259,24 +259,24 @@ async function drawSignatureSeal(pdfDoc, signerName, validTo, dateStr) {
     size: 6, font: fontBold,
     color: rgb(0.35, 0.35, 0.35),
   });
-  lastPage.drawText(displayName, {
+  lastPage.drawText(displayName || 'Assinante', {
     x: sealX + 40, y: sealY + 67,
     size: 8, font: fontBold,
     color: rgb(0.0, 0.18, 0.42),
   });
   if (docNumber) {
-    lastPage.drawText(docNumber, {
+    lastPage.drawText(docNumber || '', {
       x: sealX + 40, y: sealY + 56,
       size: 6.5, font,
       color: rgb(0.20, 0.20, 0.20),
     });
   }
-  lastPage.drawText('Data e hora: ' + dateStr, {
+  lastPage.drawText('Data e hora: ' + (dateStr || ''), {
     x: sealX + 40, y: sealY + 45,
     size: 6.5, font,
     color: rgb(0.20, 0.20, 0.20),
   });
-  lastPage.drawText('Certificado valido ate: ' + validTo, {
+  lastPage.drawText('Certificado valido ate: ' + (validTo || ''), {
     x: sealX + 40, y: sealY + 35,
     size: 6.5, font,
     color: rgb(0.20, 0.20, 0.20),
